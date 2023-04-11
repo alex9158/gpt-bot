@@ -11,6 +11,7 @@ const discordClient = new Client({
     IntentsBitField.Flags.Guilds,
     IntentsBitField.Flags.GuildMessages,
     IntentsBitField.Flags.MessageContent,
+    IntentsBitField.Flags.GuildMessageReactions,
   ],
 });
 
@@ -22,6 +23,7 @@ const openAiClient = new OpenAIApi(openApiClientConfig);
 
 discordClient.on("messageCreate", async (msg) => {
   try {
+    if (msg.system) return;
     if (
       !msg.guild.members.me.permissionsIn(msg.channel).has("SendMessages") ||
       !msg.guild.members.me.permissionsIn(msg.channel).has("ReadMessageHistory")
@@ -50,7 +52,8 @@ discordClient.on("messageCreate", async (msg) => {
         !historicalMessage.content ||
         historicalMessage.content.startsWith("!") ||
         (historicalMessage.author.bot &&
-          historicalMessage.author.id != discordClient.user.id)
+          historicalMessage.author.id != discordClient.user.id) ||
+        historicalMessage.system
       ) {
         continue;
       }
@@ -85,6 +88,7 @@ discordClient.on("messageCreate", async (msg) => {
     }
 
     if (msg.content.toLowerCase().startsWith("clear history")) {
+      msg.react("👍");
       return;
     }
     await msg.channel.sendTyping();
