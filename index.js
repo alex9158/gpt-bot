@@ -1,11 +1,11 @@
 const { Client, Events, IntentsBitField } = require("discord.js");
 const { Configuration, OpenAIApi } = require("openai");
 require("dotenv/config");
+const config = require("./config.json");
 
-let allowedChannels = ["1095313352596668428"];
+const testing = false;
 
-const testingAllowedChannels = ["1095307902413189141"];
-allowedChannels = testingAllowedChannels;
+//allowedChannels = testingAllowedChannels;
 const discordClient = new Client({
   intents: [
     IntentsBitField.Flags.Guilds,
@@ -22,21 +22,24 @@ const openAiClient = new OpenAIApi(openApiClientConfig);
 
 discordClient.on("messageCreate", async (msg) => {
   try {
-    if (allowedChannels.indexOf(msg.channelId) == -1) return;
+    if (
+      !msg.guild.members.me.permissionsIn(msg.channel).has("SendMessages") ||
+      !msg.guild.members.me.permissionsIn(msg.channel).has("ReadMessageHistory")
+    )
+      return;
     if (msg.author.bot) return;
     if (msg.content.startsWith("!")) return;
 
-    const conversationLog = [
+    let conversationLog = [
       {
         role: "system",
-        content: "You are a friendly chatbot.",
+        content:
+          config.initialPrompt[msg.channelId] || config.defaultInitialPrompt,
       },
     ];
 
-    await msg.channel.sendTyping();
-
     const channelMessageHistory = await msg.channel.messages.fetch({
-      limit: 50,
+      limit: config.discordMessageFetchLimit,
     });
     channelMessageHistory.reverse();
 
@@ -53,38 +56,59 @@ discordClient.on("messageCreate", async (msg) => {
       }
 
       if (historicalMessage.author.id === msg.author.id) {
-        conversationLog.push({
-          role: "user",
-          content: historicalMessage.content,
-        });
+        if (
+          historicalMessage.content.toLowerCase().startsWith("clear history")
+        ) {
+          conversationLog = [conversationLog[0]];
+          continue;
+        } else {
+          conversationLog.push({
+            role: "user",
+            content: historicalMessage.content,
+          });
+        }
       } else if (historicalMessage.author.id === discordClient.user.id) {
         if (historicalMessage.content.startsWith("ERROR:")) continue;
         //if message was sent by gpt-bot, check that the message it was replying to is from the same user as current message
         if (historicalMessage.reference) {
-          const originalMessage = await historicalMessage.fetchReference();
-          if (originalMessage.author.id === msg.author.id) {
-            conversationLog.push({
-              role: "assistant",
-              content: historicalMessage.content,
-            });
-          }
+          try {
+            const originalMessage = await historicalMessage.fetchReference();
+            if (originalMessage.author.id === msg.author.id) {
+              conversationLog.push({
+                role: "assistant",
+                content: historicalMessage.content,
+              });
+            }
+          } catch (err) {}
         }
       }
     }
 
+    if (msg.content.toLowerCase().startsWith("clear history")) {
+      return;
+    }
+    await msg.channel.sendTyping();
     try {
       const result = await openAiClient.createChatCompletion({
         model: "gpt-3.5-turbo",
         messages: conversationLog,
       });
-      msg.reply(result.data.choices[0].message);
+      const splitMessage = splitter(
+        result.data.choices[0].message.content,
+        1900
+      );
+      for (let msgStr of splitMessage) {
+        msg.reply(msgStr);
+      }
     } catch (err) {
-      msg.reply({
-        content: "ERROR: " + error.message,
-      });
+      console.log(err);
+      try {
+        msg.reply({
+          content: "ERROR: " + error.message,
+        });
+      } catch (e) {}
     }
   } catch (error) {
-    msg.reply("ERROR: " + JSON.stringify(error));
     console.log(error);
   }
 });
@@ -93,3 +117,17 @@ discordClient.once(Events.ClientReady, (c) => {
   console.log("Gpt-Bot intialised");
 });
 discordClient.login(process.env.TOKEN);
+
+function splitter(str, l) {
+  var strs = [];
+  while (str.length > l) {
+    var pos = str.substring(0, l).lastIndexOf(" ");
+    pos = pos <= 0 ? l : pos;
+    strs.push(str.substring(0, pos));
+    var i = str.indexOf(" ", pos) + 1;
+    if (i < pos || i > pos + l) i = pos;
+    str = str.substring(i);
+  }
+  strs.push(str);
+  return strs;
+}
